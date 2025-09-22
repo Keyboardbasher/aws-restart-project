@@ -1,0 +1,170 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1404\cocoasubrtf470
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fnil\fcharset0 LucidaGrande;}
+{\colortbl;\red255\green255\blue255;}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{square\}}{\leveltext\leveltemplateid1\'01\uc0\u9642 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{hyphen\}}{\leveltext\leveltemplateid2\'01\uc0\u8259 ;}{\levelnumbers;}\fi-360\li1440\lin1440 }{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\margl1440\margr1440\vieww14500\viewh15340\viewkind0
+\pard\tx220\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\li720\fi-720\pardirnatural\partightenfactor0
+\ls1\ilvl0
+\f0\fs24 \cf0 {\listtext	
+\f1 \uc0\u9642 
+\f0 	}Amazon Route 53 - For Domain registration and DNS resolution\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}Amazon CloudFront - For content delivery permitting low latency for accessing the web application\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}Amazon API GateWay - Used as a both reverse proxy and as a control mechanism for responding to the requests for the various services and micro-services used in the web application\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}Amazon S3 - for storage of the images of the inventory as well as the 3D images\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}Amazon DynamoDB - For data storage and high throughput and reads and writes permitting high availability and allowing near-realtime access to the data\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}AWS Lambda - server less option instead of using a monolithic style application requiring full code repository and updates Lambda can be used in it\'92s stead. I have chosen to incorporate the three main functions that can be performed by the lambda services into one function  \
+\pard\tx940\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\li1440\fi-1440\pardirnatural\partightenfactor0
+\ls1\ilvl1\cf0 {\listtext	\uc0\u8259 	}Sales Service\
+{\listtext	\uc0\u8259 	}Order/Cart Service\
+{\listtext	\uc0\u8259 	}Inventory Service\
+{\listtext	\uc0\u8259 	}ETL for data extraction, Transformation and Load - this I have left as a separate Lambda function for extraction of data that could have been stored in s3\
+\pard\tx220\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\li720\fi-720\pardirnatural\partightenfactor0
+\ls1\ilvl0\cf0 {\listtext	
+\f1 \uc0\u9642 
+\f0 	}AWS EC2 GPU for 3D Rendering - for the 3D rendering of the products that have been selected by the customer.\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}AWS S3 - for parquet output from the ETL service(application) that has been created using the lambda service\
+{\listtext	
+\f1 \uc0\u9642 
+\f0 	}Amazon Athena for Data Analysis and presentation using services such as Quicksight - for high level analysis using sql \
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 \
+\
+Here\'92s an example lambda function that incorporates the CRUD functions required for all three tables. \
+\
+	import json\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\li742\fi-40\pardirnatural\partightenfactor0
+\cf0 import boto3\
+import os\
+import logging\
+\
+# Configure logger\
+logger = logging.getLogger()\
+logger.setLevel(logging.INFO)\
+\
+# Initialize AWS services\
+dynamodb = boto3.resource('dynamodb')\
+sns = boto3.client('sns')\
+\
+# Environment variables\
+INVENTORY_TABLE = os.getenv("INVENTORY_TABLE", "RetailEdgeInventory")\
+SALES_TABLE = os.getenv("SALES_TABLE", "RetailEdgeSales")\
+SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN")\
+\
+def lambda_handler(event, context):\
+    try:\
+        # Parse input\
+        body = json.loads(event['body'])\
+        required_fields = ['saleId', 'itemId', 'quantity']\
+        \
+        if not all(field in body for field in required_fields):\
+            return error_response(400, "Missing required fields in request body")\
+            \
+        sale_id = body['saleId']\
+        item_id = body['itemId']\
+        quantity = int(body['quantity'])\
+        \
+        # Validate quantity\
+        if quantity <= 0:\
+            return error_response(400, "Quantity must be a positive integer")\
+\
+        # Record sale\
+        record_sale(sale_id, item_id, quantity)\
+        \
+        # Update inventory\
+        new_stock = update_inventory(item_id, quantity)\
+        \
+        # Check stock level\
+        if new_stock < 5:\
+            trigger_low_stock_alert(item_id, new_stock)\
+            \
+        return success_response("Sale recorded successfully")\
+\
+    except json.JSONDecodeError:\
+        return error_response(400, "Invalid JSON format")\
+    except Exception as e:\
+        logger.error(f"Error processing request: \{str(e)\}")\
+        return error_response(500, "Internal server error")\
+\
+def record_sale(sale_id, item_id, quantity):\
+    sales_table = dynamodb.Table(SALES_TABLE)\
+    sales_table.put_item(\
+        Item=\{\
+            "saleId": sale_id,\
+            "itemId": item_id,\
+            "quantity": quantity,\
+            "timestamp": datetime.now().isoformat()\
+        \}\
+    )\
+\
+def update_inventory(item_id, quantity):\
+    inventory_table = dynamodb.Table(INVENTORY_TABLE)\
+    \
+    try:\
+        response = inventory_table.get_item(Key=\{"itemId": item_id\})\
+        if 'Item' not in response:\
+            raise ValueError("Item not found in inventory")\
+            \
+        current_stock = response['Item'].get('stock', 0)\
+        new_stock = current_stock - quantity\
+        \
+        if new_stock < 0:\
+            raise ValueError("Insufficient stock to fulfill sale")\
+            \
+        inventory_table.update_item(\
+            Key=\{"itemId": item_id\},\
+            UpdateExpression="SET stock = :s",\
+            ExpressionAttributeValues=\{":s": new_stock\}\
+        )\
+        \
+        return new_stock\
+        \
+    except ClientError as e:\
+        logger.error(f"DynamoDB Error: \{e.response['Error']['Message']\}")\
+        raise\
+\
+def trigger_low_stock_alert(item_id, stock):\
+    try:\
+        sns.publish(\
+            TopicArn=SNS_TOPIC_ARN,\
+            Message=json.dumps(\{\
+                "alertType": "LOW_STOCK",\
+                "itemId": item_id,\
+                "currentStock": stock,\
+                "message": f"Low stock alert for Item \{item_id\}. Only \{stock\} left."\
+            \}),\
+            Subject="Low Stock Alert"\
+        )\
+    except ClientError as e:\
+        logger.error(f"SNS Publish Error: \{e.response['Error']['Message']\}")\
+\
+def success_response(message):\
+    return \{\
+        "statusCode": 200,\
+        "headers": \{"Content-Type": "application/json"\},\
+        "body": json.dumps(\{"status": "success", "message": message\})\
+    \}\
+\
+def error_response(code, message):\
+    return \{\
+        "statusCode": code,\
+        "headers": \{"Content-Type": "application/json"\},\
+        "body": json.dumps(\{"status": "error", "message": message\})\
+    \}\
+\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\li742\fi-743\pardirnatural\partightenfactor0
+\cf0 Product ,Order, Cart, Inventory Services can be simplified to Inventory and Sales\
+The three separate DynamoDB instances can be consolidated into one with an Inventory Table, Sales Table\
+The data analysis using Kinesis was not specified, however if required a service such as Athena can be implemented after the fact.}
